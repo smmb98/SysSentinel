@@ -73,6 +73,33 @@ function appendMd(md) {
   }
 }
 
+/** Deletes any log file (activity.md, activity.jsonl, .bak) older than `days`. */
+function purgeOldLogs(days) {
+  try {
+    const dir = logsDir();
+    if (!fs.existsSync(dir)) return 0;
+    const cutoff = Date.now() - days * 24 * 60 * 60 * 1000;
+    let removed = 0;
+    for (const name of fs.readdirSync(dir)) {
+      const file = path.join(dir, name);
+      try {
+        const st = fs.statSync(file);
+        if (st.isFile() && st.mtimeMs < cutoff) {
+          fs.unlinkSync(file);
+          removed++;
+        }
+      } catch (_) { /* skip */ }
+    }
+    if (removed > 0) {
+      appendJsonl({ type: 'maintenance', timestamp: timestamp(), action: 'purged_old_logs', removed, cutoffIso: new Date(cutoff).toISOString() });
+    }
+    return removed;
+  } catch (err) {
+    console.error('log purge failed:', err.message);
+    return 0;
+  }
+}
+
 function historyContent(format) {
   ensureDirs();
   const file = format === 'jsonl' ? logJsonlPath() : logMdPath();
@@ -98,5 +125,6 @@ module.exports = {
   humanTime,
   appendJsonl,
   appendMd,
+  purgeOldLogs,
   historyContent,
 };

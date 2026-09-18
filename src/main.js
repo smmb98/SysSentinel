@@ -9,9 +9,11 @@ const {
   FAST_POLL_INTERVAL_MS,
   MAX_FEED,
   SSE_HEARTBEAT_MS,
+  LOG_RETENTION_DAYS,
+  RETENTION_CHECK_MS,
 } = require('./config');
 const { createState } = require('./state');
-const { ensureDirs, appendJsonl, appendMd, humanTime, timestamp, dataRoot, logsDir } = require('./logger');
+const { ensureDirs, appendJsonl, appendMd, humanTime, timestamp, dataRoot, logsDir, purgeOldLogs } = require('./logger');
 const { fastSnapshot, heavyScan, buildAnomalies } = require('./monitor');
 const { uninstallScheduledTask, installScheduledTask } = require('./scheduler');
 const { createHub } = require('./web/sse');
@@ -122,6 +124,10 @@ async function main() {
   const hub = createHub(SSE_HEARTBEAT_MS);
   ensureDirs();
 
+  const purged = purgeOldLogs(LOG_RETENTION_DAYS);
+  const retentionTimer = setInterval(() => purgeOldLogs(LOG_RETENTION_DAYS), RETENTION_CHECK_MS);
+  if (retentionTimer.unref) retentionTimer.unref();
+
   console.log(APP_TITLE);
   console.log('==============================');
   console.log(`Data directory : ${dataRoot()}`);
@@ -129,6 +135,8 @@ async function main() {
   console.log(`Dashboard      : http://localhost:${PORT}`);
   console.log(`CPU / RAM      : live every ${FAST_POLL_INTERVAL_MS / 1000}s (native)`);
   console.log(`Process scan   : every ${POLL_INTERVAL_MS / 1000}s`);
+  console.log(`Log retention  : ${LOG_RETENTION_DAYS} days`);
+  console.log(purged > 0 ? `Cleaned up ${purged} old log file(s).` : '');
   console.log('==============================');
 
   const server = createServer({
