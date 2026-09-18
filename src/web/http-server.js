@@ -1,7 +1,7 @@
 'use strict';
 
 const http = require('http');
-const { HOST } = require('../config');
+const { HOST, PORT } = require('../config');
 const { historyContent } = require('../logger');
 const dashboardHtml = require('./dashboard');
 const { uninstall, killSelf } = require('../uninstaller');
@@ -9,6 +9,21 @@ const { uninstall, killSelf } = require('../uninstaller');
 function send(res, code, body, type) {
   res.writeHead(code, { 'Content-Type': type || 'text/html; charset=utf-8' });
   res.end(body);
+}
+
+function isTrustedRequest(req) {
+  const origin = req.headers.origin || req.headers.referer;
+  if (!origin) return true;
+  try {
+    const u = new URL(origin);
+    const host = u.hostname.toLowerCase();
+    const port = u.port ? Number(u.port) : 80;
+    if (host !== '127.0.0.1' && host !== 'localhost') return false;
+    if (port !== PORT) return false;
+  } catch (_) {
+    return false;
+  }
+  return true;
 }
 
 function handleApi(req, res, state, hub) {
@@ -35,7 +50,13 @@ function handleApi(req, res, state, hub) {
     return send(res, 200, historyContent(format), format === 'jsonl' ? 'application/json' : 'text/plain; charset=utf-8');
   }
 
-  if (url.pathname === '/api/uninstall' && req.method === 'POST') {
+  if (url.pathname === '/api/uninstall') {
+    if (req.method !== 'POST') {
+      return send(res, 405, JSON.stringify({ error: 'method not allowed' }), 'application/json');
+    }
+    if (!isTrustedRequest(req) || req.headers['x-requested-with'] !== 'XMLHttpRequest') {
+      return send(res, 403, JSON.stringify({ error: 'forbidden' }), 'application/json');
+    }
     uninstall(state, (steps) => {
       send(res, 200, JSON.stringify({ ok: true, steps }), 'application/json');
       setTimeout(() => killSelf(state), 1200);

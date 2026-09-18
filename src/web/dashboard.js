@@ -145,6 +145,15 @@ let feedItems = [];
 let isLive = false;
 let es = null;
 
+function esc(s){
+  return String(s == null ? '' : s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
 function setup(){
   $('refreshBtn').onclick = () => fetchStatus(true);
   $('historyBtn').onclick = openHistory;
@@ -243,10 +252,10 @@ function renderFeed(newOnes){
   box.innerHTML = feedItems.map(a => {
     const isNew = newOnes.some(n => n && n.timestamp === a.timestamp && n.title === a.title);
     return '<div class="anomaly ' + (a.level === 'critical' ? 'critical' : '') + (isNew ? ' new' : '') + '">' +
-      '<div class="icon">' + (a.icon || '⚠️') + '</div>' +
-      '<div><div class="t">' + a.title + '</div>' +
-      '<div class="d">' + a.detail + '</div>' +
-      (a.timestamp ? '<div class="time">' + new Date(a.timestamp).toLocaleString() + '</div>' : '') +
+      '<div class="icon">' + esc(a.icon || '⚠️') + '</div>' +
+      '<div><div class="t">' + esc(a.title) + '</div>' +
+      '<div class="d">' + esc(a.detail) + '</div>' +
+      (a.timestamp ? '<div class="time">' + esc(new Date(a.timestamp).toLocaleString()) + '</div>' : '') +
     '</div></div>';
   }).join('');
 }
@@ -308,7 +317,7 @@ async function doUninstall(){
   $('modalActions').innerHTML = '';
   $('modalBody').innerHTML = '<p><span class="spin"></span> Removing ${APP_NAME}…</p>';
   try{
-    const r = await fetch('/api/uninstall', { method: 'POST' });
+    const r = await fetch('/api/uninstall', { method: 'POST', headers: { 'X-Requested-With': 'XMLHttpRequest' } });
     const data = await r.json();
     const steps = (data.steps || []).map(s => '<li>' + s + '</li>').join('');
     $('modalBody').innerHTML = '<p>✅ <b>${APP_NAME} has been removed.</b></p><ul>' + steps + '</ul><p>You can close this tab now.</p>';

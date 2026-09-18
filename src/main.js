@@ -149,22 +149,40 @@ async function main() {
     },
   });
 
+  function scheduleHeavy() {
+    if (state.ended) return;
+    state.heavyTimer = setTimeout(() => {
+      heavyTick(state, hub).finally(() => scheduleHeavy());
+    }, POLL_INTERVAL_MS);
+  }
+
+  function shutdown() {
+    if (state.ended) return;
+    state.ended = true;
+    clearInterval(state.timer);
+    clearTimeout(state.heavyTimer);
+    clearInterval(retentionTimer);
+    try { server.close(); } catch (_) { /* ignore */ }
+    const forced = setTimeout(() => process.exit(0), 1000);
+    if (forced.unref) forced.unref();
+  }
+
   state.timer = setInterval(() => fastTick(state, hub), FAST_POLL_INTERVAL_MS);
-  state.heavyTimer = setInterval(() => heavyTick(state, hub), POLL_INTERVAL_MS);
 
   fastTick(state, hub);
-  heavyTick(state, hub).then(() => {
-    if (!flags.headless && !flags.noBrowser) openBrowser();
-  });
+  heavyTick(state, hub)
+    .catch(() => {})
+    .then(() => {
+      if (!flags.headless && !flags.noBrowser) openBrowser();
+      scheduleHeavy();
+    });
 
   server.listen(PORT, HOST, () => {
     console.log('Listening on http://localhost:' + PORT);
   });
 
-  process.on('SIGINT', () => {
-    state.ended = true;
-    process.exit(0);
-  });
+  process.on('SIGINT', shutdown);
+  process.on('SIGTERM', shutdown);
 }
 
 module.exports = { main, fastTick, heavyTick };
