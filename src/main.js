@@ -6,12 +6,13 @@ const {
   PORT,
   HOST,
   POLL_INTERVAL_MS,
+  FAST_POLL_INTERVAL_MS,
   MAX_FEED,
   SSE_HEARTBEAT_MS,
 } = require('./config');
 const { createState } = require('./state');
 const { ensureDirs, appendJsonl, appendMd, humanTime, timestamp, dataRoot, logsDir } = require('./logger');
-const { getSnapshot, buildAnomalies } = require('./monitor');
+const { fastSnapshot, heavyScan, buildAnomalies } = require('./monitor');
 const { uninstallScheduledTask, installScheduledTask } = require('./scheduler');
 const { createHub } = require('./web/sse');
 const { createServer } = require('./web/http-server');
@@ -37,22 +38,56 @@ function openBrowser() {
   }
 }
 
-async function tick(state, hub) {
+/**
+ * Fast tick — every 1s. Pure os-module reads (native, no process spawns).
+ * Updates the rendered snapshot, broadcasts it, and logs status transitions.
+ */
+function fastTick(state, hub) {
+  if (state.ended) return;
+  const snap = fastSnapshot(state);
+
+  if (state.lastStatus !== snap.status) {
+    const arrow = { warning: '🟠', critical: '🔴', normal: '🟢' }[snap.status] || '🟢';
+    appendMd(`## ${humanTime(new Date(snap.timestamp))}\n\n${arrow} **Status changed to ${snap.status.toUpperCase()}** — ${snap.summary}\n`);
+    state.lastStatus = snap.status;
+  }
+
+  hub.broadcast('snapshot', snap);
+}
+
+/**
+ * Heavy tick — every 5s. The only step that spawns a helper process
+ * (systeminformation process scan). Detects anomalies, logs, broadcasts.
+ */
+async function heavyTick(state, hub) {
   if (state.ended) return;
   try {
-    const snap = await getSnapshot(state);
+    const heavy = await heavyScan(state);
+    const snap = state.latest;
+    const ts = snap ? snap.timestamp : timestamp();
 
     appendJsonl({
       type: 'snapshot',
-      ...snap,
-      topProcess: snap.topProcess ? { ...snap.topProcess } : null,
-      terminalSpawns: snap.terminalSpawns.map((s) => ({ ...s })),
+      timestamp: ts,
+      cpu: snap ? snap.cpu : { load: 0 },
+      mem: snap ? snap.mem : { totalGb: 0, freeGb: 0, usedGb: 0, usedPercent: 0 },
+      topProcess: heavy.topProcess,
+      terminalSpawns: heavy.terminalSpawns.map((s) => ({ ...s })),
+      status: snap ? snap.status : 'normal',
+      cpuSpike: heavy.cpuSpike,
+      summary: snap ? snap.summary : '',
     });
 
-    const feedEntries = buildAnomalies(snap).map((a) => ({ ...a, timestamp: snap.timestamp }));
+    const feedEntries = buildAnomalies(
+      snap
+        ? { ...snap, topProcess: heavy.topProcess, terminalSpawns: heavy.terminalSpawns, cpuSpike: heavy.cpuSpike }
+        : { cpu: { load: 0 }, mem: { totalGb: 0, freeGb: 0, usedGb: 0, usedPercent: 0 }, topProcess: heavy.topProcess, terminalSpawns: heavy.terminalSpawns, cpuSpike: heavy.cpuSpike, status: 'normal' }
+    ).map((a) => ({ ...a, timestamp: ts }));
 
     if (feedEntries.length > 0) {
-      let md = `## ${humanTime(new Date(snap.timestamp))} — ${snap.status.toUpperCase()}\n\n${snap.summary}\n\n`;
+      const statusLabel = (snap && snap.status) || 'normal';
+      const summary = snap ? snap.summary : '';
+      let md = `## ${humanTime(new Date(ts))} — ${statusLabel.toUpperCase()}\n\n${summary}\n\n`;
       for (const a of feedEntries) {
         md += `- ${a.icon} **${a.title}** — ${a.detail}\n`;
       }
@@ -66,14 +101,6 @@ async function tick(state, hub) {
         hub.broadcast('anomaly', a);
       }
     }
-
-    if (state.lastStatus !== snap.status) {
-      const arrow = { warning: '🟠', critical: '🔴', normal: '🟢' }[snap.status] || '🟢';
-      appendMd(`## ${humanTime(new Date(snap.timestamp))}\n\n${arrow} **Status changed to ${snap.status.toUpperCase()}** — ${snap.summary}\n`);
-      state.lastStatus = snap.status;
-    }
-
-    hub.broadcast('snapshot', snap);
   } catch (err) {
     appendJsonl({ type: 'error', timestamp: timestamp(), message: err.message });
   }
@@ -100,7 +127,8 @@ async function main() {
   console.log(`Data directory : ${dataRoot()}`);
   console.log(`Logs           : ${logsDir()}`);
   console.log(`Dashboard      : http://localhost:${PORT}`);
-  console.log(`Monitoring     : every ${POLL_INTERVAL_MS / 1000} seconds`);
+  console.log(`CPU / RAM      : live every ${FAST_POLL_INTERVAL_MS / 1000}s (native)`);
+  console.log(`Process scan   : every ${POLL_INTERVAL_MS / 1000}s`);
   console.log('==============================');
 
   const server = createServer({
@@ -113,8 +141,11 @@ async function main() {
     },
   });
 
-  state.timer = setInterval(() => tick(state, hub), POLL_INTERVAL_MS);
-  tick(state, hub).then(() => {
+  state.timer = setInterval(() => fastTick(state, hub), FAST_POLL_INTERVAL_MS);
+  state.heavyTimer = setInterval(() => heavyTick(state, hub), POLL_INTERVAL_MS);
+
+  fastTick(state, hub);
+  heavyTick(state, hub).then(() => {
     if (!flags.headless && !flags.noBrowser) openBrowser();
   });
 
@@ -128,4 +159,4 @@ async function main() {
   });
 }
 
-module.exports = { main, tick };
+module.exports = { main, fastTick, heavyTick };

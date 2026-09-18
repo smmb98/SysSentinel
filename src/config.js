@@ -6,6 +6,7 @@ const SCHEDULED_TASK_NAME = 'SysSentinelMonitor';
 const PORT = 4820;
 const HOST = '127.0.0.1';
 const POLL_INTERVAL_MS = 5000;
+const FAST_POLL_INTERVAL_MS = 1000;
 const LOG_ROTATE_BYTES = 10 * 1024 * 1024; // 10 MB
 const MAX_HISTORY = 100;
 const MAX_FEED = 50;
@@ -37,6 +38,7 @@ module.exports = {
   PORT,
   HOST,
   POLL_INTERVAL_MS,
+  FAST_POLL_INTERVAL_MS,
   LOG_ROTATE_BYTES,
   MAX_HISTORY,
   MAX_FEED,

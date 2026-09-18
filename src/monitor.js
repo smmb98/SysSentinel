@@ -1,8 +1,58 @@
 'use strict';
 
+const os = require('os');
 const si = require('systeminformation');
 const { TERMINAL_PROCS, THRESHOLDS, MAX_HISTORY } = require('./config');
 const { timestamp } = require('./logger');
+
+/* ------------------------------------------------------------------ */
+/* Fast sampling (1s) — native, near-zero cost, no spawned processes   */
+/* ------------------------------------------------------------------ */
+
+let prevCpuTimes = null;
+
+function sampleCpuLoad() {
+  const cpus = os.cpus();
+  let idle = 0;
+  let total = 0;
+  for (const c of cpus) {
+    const t = c.times;
+    total += t.user + t.nice + t.sys + t.idle + t.irq;
+    idle += t.idle;
+  }
+  const cur = { idle, total };
+  if (prevCpuTimes === null) {
+    prevCpuTimes = cur;
+    return 0;
+  }
+  const totalDiff = cur.total - prevCpuTimes.total;
+  const idleDiff = cur.idle - prevCpuTimes.idle;
+  prevCpuTimes = cur;
+  if (totalDiff <= 0) return 0;
+  return Math.max(0, Math.min(100, 100 * (1 - idleDiff / totalDiff)));
+}
+
+function sampleMem() {
+  const total = os.totalmem();
+  const free = os.freemem();
+  const used = total - free;
+  return {
+    totalGb: +(total / 1024 ** 3).toFixed(2),
+    freeGb: +(free / 1024 ** 3).toFixed(2),
+    usedGb: +(used / 1024 ** 3).toFixed(2),
+    usedPercent: total > 0 ? +((used / total) * 100).toFixed(1) : 0,
+  };
+}
+
+function computeStatus(cpuLoad, memUsedPercent) {
+  if (cpuLoad >= THRESHOLDS.criticalCpu || memUsedPercent >= THRESHOLDS.criticalMemUsedPercent) return 'critical';
+  if (cpuLoad >= THRESHOLDS.warningCpu || memUsedPercent >= THRESHOLDS.warningMemUsedPercent) return 'warning';
+  return 'normal';
+}
+
+/* ------------------------------------------------------------------ */
+/* Shared helpers                                                      */
+/* ------------------------------------------------------------------ */
 
 function beautify(name) {
   if (!name) return 'A program';
@@ -28,102 +78,6 @@ function plainEnglish(snap) {
     line += `. Top consumer: ${p.name} (PID ${p.pid}) at ${p.cpuPct.toFixed(1)}% CPU / ${p.memPct.toFixed(1)}% memory`;
   }
   return line;
-}
-
-function collectTerminalProcesses(processList) {
-  const terminals = new Map();
-  for (const proc of processList) {
-    if (TERMINAL_PROCS.has(String(proc.name).toLowerCase())) {
-      terminals.set(proc.pid, { parentPid: proc.parentPid });
-    }
-  }
-  return terminals;
-}
-
-function computeStatus(cpuLoad, memUsedPercent) {
-  if (cpuLoad >= THRESHOLDS.criticalCpu || memUsedPercent >= THRESHOLDS.criticalMemUsedPercent) return 'critical';
-  if (cpuLoad >= THRESHOLDS.warningCpu || memUsedPercent >= THRESHOLDS.warningMemUsedPercent) return 'warning';
-  return 'normal';
-}
-
-async function getSnapshot(state) {
-  const [load, mem, procs] = await Promise.all([
-    si.currentLoad(),
-    si.mem(),
-    si.processes(),
-  ]);
-
-  const totalGb = mem.total / 1024 / 1024 / 1024;
-  const freeGb = mem.available / 1024 / 1024 / 1024;
-  const usedGb = totalGb - freeGb;
-  const usedPercent = totalGb > 0 ? (usedGb / totalGb) * 100 : 0;
-
-  let topProcess = null;
-  let maxScore = -1;
-  const list = (procs && procs.list) || [];
-  for (const proc of list) {
-    if (proc.pid === 0 || /system idle/i.test(String(proc.name))) continue;
-    const cpuPct = proc.cpu || 0;
-    const memPct = proc.mem || 0;
-    const score = cpuPct + memPct * 4;
-    if (score > maxScore) {
-      maxScore = score;
-      topProcess = {
-        name: proc.name,
-        pid: proc.pid,
-        cpuPct,
-        memPct,
-      };
-    }
-  }
-
-  const cpuLoad = load.currentLoad || 0;
-  const status = computeStatus(cpuLoad, usedPercent);
-  const cpuJump = state.prevCpu > 0 ? cpuLoad - state.prevCpu >= THRESHOLDS.cpuSpikeJump : false;
-  state.prevCpu = cpuLoad;
-
-  const terminalPids = collectTerminalProcesses(list);
-  const spawns = [];
-  const firstScan = !state.terminalSeeded;
-
-  for (const pid of terminalPids.keys()) {
-    if (state.prevTerminalPids.has(pid) || firstScan) continue;
-    const meta = terminalPids.get(pid);
-    if (meta && meta.parentPid === process.pid) continue; // systeminformation helper
-    const match = list.find((p) => p.pid === pid);
-    spawns.push({
-      name: match ? match.name : 'script',
-      pid,
-      cmdline: match && match.command ? match.command : '',
-    });
-  }
-  state.prevTerminalPids = new Set(terminalPids.keys());
-  state.terminalSeeded = true;
-
-  const snapshot = {
-    timestamp: timestamp(),
-    cpu: { load: cpuLoad },
-    mem: {
-      totalGb: +totalGb.toFixed(2),
-      freeGb: +freeGb.toFixed(2),
-      usedGb: +usedGb.toFixed(2),
-      usedPercent: +usedPercent.toFixed(1),
-    },
-    topProcess,
-    status,
-    terminalSpawns: spawns,
-    cpuSpike: cpuJump,
-    summary: '',
-  };
-
-  snapshot.summary = plainEnglish(snapshot);
-
-  state.latest = snapshot;
-  state.status = status;
-  state.history.push(snapshot);
-  if (state.history.length > MAX_HISTORY) state.history.shift();
-
-  return snapshot;
 }
 
 function buildAnomalies(snap) {
@@ -171,4 +125,97 @@ function buildAnomalies(snap) {
   return anomalies;
 }
 
-module.exports = { getSnapshot, buildAnomalies, plainEnglish, beautify };
+/* ------------------------------------------------------------------ */
+/* Fast snapshot (CPU/RAM via os module — every 1s)                    */
+/* ------------------------------------------------------------------ */
+
+function fastSnapshot(state) {
+  const load = sampleCpuLoad();
+  const mem = sampleMem();
+  const status = computeStatus(load, mem.usedPercent);
+  const heavy = state.heavy;
+
+  const snap = {
+    timestamp: timestamp(),
+    cpu: { load },
+    mem,
+    topProcess: heavy ? heavy.topProcess : null,
+    terminalSpawns: [],
+    status,
+    summary: '',
+  };
+  snap.summary = plainEnglish(snap);
+
+  state.latest = snap;
+  state.status = status;
+  state.history.push(snap);
+  if (state.history.length > MAX_HISTORY) state.history.shift();
+
+  return snap;
+}
+
+/* ------------------------------------------------------------------ */
+/* Heavy scan (process table via systeminformation — every 5s)         */
+/* ------------------------------------------------------------------ */
+
+function collectTerminalProcesses(processList) {
+  const terminals = new Map();
+  for (const proc of processList) {
+    if (TERMINAL_PROCS.has(String(proc.name).toLowerCase())) {
+      terminals.set(proc.pid, { parentPid: proc.parentPid });
+    }
+  }
+  return terminals;
+}
+
+async function heavyScan(state) {
+  const procs = await si.processes();
+  const list = (procs && procs.list) || [];
+
+  let topProcess = null;
+  let maxScore = -1;
+  for (const proc of list) {
+    if (proc.pid === 0 || /system idle/i.test(String(proc.name))) continue;
+    const cpuPct = proc.cpu || 0;
+    const memPct = proc.mem || 0;
+    const score = cpuPct + memPct * 4;
+    if (score > maxScore) {
+      maxScore = score;
+      topProcess = { name: proc.name, pid: proc.pid, cpuPct, memPct };
+    }
+  }
+
+  const terminalPids = collectTerminalProcesses(list);
+  const spawns = [];
+  const firstScan = !state.terminalSeeded;
+  for (const pid of terminalPids.keys()) {
+    if (state.prevTerminalPids.has(pid) || firstScan) continue;
+    const meta = terminalPids.get(pid);
+    if (meta && meta.parentPid === process.pid) continue; // systeminformation helper
+    const match = list.find((p) => p.pid === pid);
+    spawns.push({
+      name: match ? match.name : 'script',
+      pid,
+      cmdline: match && match.command ? match.command : '',
+    });
+  }
+  state.prevTerminalPids = new Set(terminalPids.keys());
+  state.terminalSeeded = true;
+
+  const cpuLoad = state.latest ? state.latest.cpu.load : 0;
+  const cpuSpike = state.prevCpuHeavy > 0 && cpuLoad - state.prevCpuHeavy >= THRESHOLDS.cpuSpikeJump;
+  state.prevCpuHeavy = cpuLoad;
+
+  state.heavy = { topProcess, terminalSpawns: spawns, timestamp: timestamp() };
+
+  return { topProcess, terminalSpawns: spawns, cpuSpike };
+}
+
+module.exports = {
+  fastSnapshot,
+  heavyScan,
+  buildAnomalies,
+  computeStatus,
+  plainEnglish,
+  beautify,
+};
