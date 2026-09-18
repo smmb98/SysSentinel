@@ -1,0 +1,27 @@
+{
+  "name": "syssentinel",
+  "version": "1.0.0",
+  "description": "User-Friendly, Zero-Trust System Monitor & Web Dashboard",
+  "main": "server.js",
+  "bin": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "build": "pkg server.js --targets node18-win-x64 --output SysSentinel.exe"
+  },
+  "pkg": {
+    "assets": []
+  },
+  "keywords": [
+    "monitor",
+    "dashboard",
+    "system-information",
+    "zero-trust"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "systeminformation": "^5.24.6"
+  },
+  "devDependencies": {
+    "pkg": "^5.8.1"
+  }
+}
