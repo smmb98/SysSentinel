@@ -15,7 +15,7 @@ const {
 const { createState } = require('./state');
 const { ensureDirs, appendJsonl, appendMd, humanTime, timestamp, dataRoot, logsDir, purgeOldLogs } = require('./logger');
 const { fastSnapshot, heavyScan, buildAnomalies } = require('./monitor');
-const { uninstallScheduledTask, installScheduledTask } = require('./scheduler');
+const { cliUninstallTask, cliInstallTask } = require('./scheduler');
 const { createHub } = require('./web/sse');
 const { createServer } = require('./web/http-server');
 
@@ -112,11 +112,11 @@ async function main() {
   const flags = parseArgs();
 
   if (flags.uninstallTask) {
-    uninstallScheduledTask();
+    await cliUninstallTask();
     return;
   }
   if (flags.installTask) {
-    await installScheduledTask();
+    await cliInstallTask();
     return;
   }
 

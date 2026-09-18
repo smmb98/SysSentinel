@@ -38,6 +38,7 @@ const HTML = `<!DOCTYPE html>
   .dot.critical{background:var(--red); color:var(--red);}
   .health-title{font-size:19px; font-weight:600;}
   .health-sub{color:var(--muted); font-size:13px; margin-top:4px;}
+  .dot.off{background:#64748b; color:#64748b;}
   .metrics{display:grid; grid-template-columns:1fr 1fr; gap:16px; margin-top:18px;}
   .metric .value{font-size:24px; font-weight:700;}
   .metric .label{color:var(--muted); font-size:12px; margin-top:3px;}
@@ -122,10 +123,22 @@ const HTML = `<!DOCTYPE html>
     </div>
   </div>
 
+  <div class="card" id="bgCard">
+    <h3>Background Monitoring</h3>
+    <div class="health">
+      <div class="dot off" id="bgDot"></div>
+      <div>
+        <div class="health-title" id="bgTitle">Checking…</div>
+        <div class="health-sub" id="bgSub">Querying Windows Task Scheduler</div>
+      </div>
+    </div>
+    <div class="actions" id="bgActions"></div>
+  </div>
+
   <div class="actions">
     <button class="primary" id="refreshBtn">🔄 Refresh Status</button>
     <button id="historyBtn">📜 View History</button>
-    <button class="danger" id="uninstallBtn">🗑️ Uninstall Safely</button>
+    <button class="danger" id="uninstallBtn" style="display:none">🗑️ Uninstall &amp; Clean Up</button>
   </div>
 
   <footer>${APP_NAME} — local only. Listens on http://localhost:${PORT} on this machine. No data leaves your PC.<br/>
@@ -144,6 +157,7 @@ const $ = (id) => document.getElementById(id);
 let feedItems = [];
 let isLive = false;
 let es = null;
+let taskExists = false;
 
 function esc(s){
   return String(s == null ? '' : s)
@@ -159,7 +173,56 @@ function setup(){
   $('historyBtn').onclick = openHistory;
   $('uninstallBtn').onclick = confirmUninstall;
   connectStream();
+  refreshBg();
   setInterval(() => { if (!isLive) fetchStatus(false); }, 5000);
+}
+
+async function refreshBg(){
+  try{
+    const r = await fetch('/api/task-status');
+    const d = await r.json();
+    taskExists = !!d.taskExists;
+  }catch(e){ taskExists = false; }
+  renderBg();
+}
+
+function renderBg(){
+  const dot = $('bgDot'), t = $('bgTitle'), s = $('bgSub'), a = $('bgActions');
+  $('uninstallBtn').style.display = taskExists ? '' : 'none';
+  dot.className = 'dot ' + (taskExists ? 'normal' : 'off');
+  t.textContent = taskExists ? 'Monitoring at startup' : 'Background monitoring is off';
+  s.textContent = taskExists
+    ? 'SysSentinel is set to start automatically every time you log on.'
+    : 'SysSentinel works only while this dashboard is open.';
+  a.innerHTML = taskExists
+    ? '<button id="disableBgBtn">⏹ Stop at startup</button>'
+    : '<button id="enableBgBtn">🕒 Monitor at startup</button>';
+  const eb = $('enableBgBtn'), db = $('disableBgBtn');
+  if (eb) eb.onclick = enableBg;
+  if (db) db.onclick = disableBg;
+}
+
+async function callBg(endpoint){
+  try{
+    const r = await fetch(endpoint, { method: 'POST' });
+    const d = await r.json();
+    $('statusline').textContent = d.ok
+      ? (d.message || 'Done')
+      : 'Could not enable background monitoring — ' + (d.message || 'unknown error');
+  }catch(e){
+    $('statusline').textContent = 'Background monitoring request failed.';
+  }
+  await refreshBg();
+}
+
+function enableBg(){
+  $('bgActions').innerHTML = '<button disabled><span class="spin"></span> Enabling…</button>';
+  callBg('/api/install-task');
+}
+
+function disableBg(){
+  $('bgActions').innerHTML = '<button disabled><span class="spin"></span> Disabling…</button>';
+  callBg('/api/uninstall-task');
 }
 
 function setLive(on, reconnecting){
@@ -300,29 +363,32 @@ async function openHistory(){
 
 function confirmUninstall(){
   const body =
-    '<p>This will completely remove ${APP_NAME} from your computer, leaving <b>zero residual footprint</b>:</p>' +
+    '<p>This removes SysSentinel <b>monitoring</b> from your computer:</p>' +
     '<ul>' +
       '<li>Delete the scheduled task "<b>SysSentinelMonitor</b>"</li>' +
       '<li>Stop the running monitor process</li>' +
-      '<li>Delete the local data directory (<code>%PROGRAMDATA%\\SysSentinel</code>) with all logs</li>' +
+      '<li>Delete all saved logs and data (<code>%PROGRAMDATA%\\SysSentinel</code>)</li>' +
     '</ul>' +
-    '<p>Your personal files and settings are <b>not</b> touched. This cannot be undone.</p>';
+    '<p>Your personal files are <b>not</b> touched. The <b>SysSentinel.exe</b> file itself is <b>not</b> deleted automatically — ' +
+    'it stays where you placed it and can be removed like any program. This cannot be undone.</p>';
   const actions =
     '<button onclick="closeModal()">Cancel</button>' +
-    '<button class="danger" onclick="doUninstall()">Yes, uninstall</button>';
+    '<button class="danger" onclick="doUninstall()">Yes, remove monitoring</button>';
   showModal('Uninstall & Clean Up', body, actions);
 }
 
 async function doUninstall(){
   $('modalActions').innerHTML = '';
-  $('modalBody').innerHTML = '<p><span class="spin"></span> Removing ${APP_NAME}…</p>';
+  $('modalBody').innerHTML = '<p><span class="spin"></span> Removing SysSentinel monitoring…</p>';
   try{
     const r = await fetch('/api/uninstall', { method: 'POST', headers: { 'X-Requested-With': 'XMLHttpRequest' } });
     const data = await r.json();
-    const steps = (data.steps || []).map(s => '<li>' + s + '</li>').join('');
-    $('modalBody').innerHTML = '<p>✅ <b>${APP_NAME} has been removed.</b></p><ul>' + steps + '</ul><p>You can close this tab now.</p>';
+    const steps = (data.steps || []).map(s => '<li>' + esc(s) + '</li>').join('');
+    $('modalBody').innerHTML = '<p>✅ <b>SysSentinel monitoring has been removed.</b></p><ul>' + steps + '</ul>' +
+      '<p>The dashboard has stopped. You can close this tab; delete the SysSentinel.exe file to finish removing it.</p>';
   }catch(e){
-    $('modalBody').innerHTML = '<p>✅ <b>${APP_NAME} has been removed.</b></p><p>The dashboard server has stopped — you can close this tab.</p>';
+    $('modalBody').innerHTML = '<p>✅ <b>SysSentinel monitoring has been removed.</b></p>' +
+      '<p>The dashboard server has stopped — you can close this tab, then delete the SysSentinel.exe file if you wish.</p>';
   }
 }
 

@@ -12,7 +12,7 @@ function dataRoot() {
       return path.join(programData, APP_NAME);
     } catch (_) { /* fall through */ }
   }
-  const local = path.join(__dirname, '..', 'data');
+  const local = path.join(process.cwd(), 'logs');
   fs.mkdirSync(local, { recursive: true });
   return local;
 }
