@@ -1,5 +1,25 @@
 'use strict';
 
+/*
+ * =============================================================================
+ * DISABLED — the background scheduled-task feature DOES NOT WORK.
+ * =============================================================================
+ *
+ * Why: SysSentinel ships as a Windows CONSOLE app (pkg default subsystem).
+ * When the scheduled task launches it at logon with `--no-browser`, a
+ * console/cmd window appears and just sits there (no dashboard, no visible
+ * activity). Closing that window kills the monitor. It is not headless, so
+ * "monitor at startup" is misleading.
+ *
+ * Integration points are commented out: api routes in http-server.js, the
+ * dashboard card/buttons in dashboard.js, and the CLI flags in main.js.
+ *
+ * Fix before re-enabling: run the exe as a GUI subsystem (or call
+ * FreeConsole(), or spawn detached with CREATE_NO_WINDOW) so no window is
+ * shown, then re-wire the button and flags above.
+ * =============================================================================
+ */
+
 const path = require('path');
 const { execFile } = require('child_process');
 const { APP_TITLE, SCHEDULED_TASK_NAME } = require('./config');
@@ -129,4 +149,6 @@ async function cliUninstallTask() {
   console.log('==============================');
 }
 
-module.exports = { taskExists, installTask, uninstallTask, cliInstallTask, cliUninstallTask };
+module.exports = {}; // disabled — see banner comment above; nothing should require this
+// (kept below for reference when the feature is fixed)
+// module.exports = { taskExists, installTask, uninstallTask, cliInstallTask, cliUninstallTask };

@@ -105,11 +105,29 @@ function buildAnomalies(snap) {
   }
 
   for (const spawn of snap.terminalSpawns) {
+    if (!spawn || typeof spawn !== 'object') continue;
+    const name = beautify(spawn.name) || 'A background script';
+    const forensic = [];
+    if (spawn.scriptPath) forensic.push(`script file: ${spawn.scriptPath}`);
+    if (spawn.parentName) forensic.push(`launched by ${beautify(spawn.parentName)} (PID ${spawn.parentPid || '?'})`);
+    if (spawn.user) forensic.push(`user account: ${spawn.user}`);
+    if (spawn.trigger) forensic.push(`likely trigger: ${spawn.trigger}`);
+    const chain = forensic.length ? ` — ${forensic.join(' · ')}` : '';
     anomalies.push({
       level: 'warning',
       icon: '🖥️',
       title: 'A new background script just launched automatically',
-      detail: `${beautify(spawn.name)} (PID ${spawn.pid}) ${spawn.cmdline ? `with command: ${spawn.cmdline}` : 'appeared in the background'}. This may be a scheduled task, startup item, or unexpected popup.`,
+      detail: `${name} (PID ${spawn.pid})${spawn.cmdline ? ` with command: ${spawn.cmdline}` : ''} appeared in the background.${chain} You can find and read the exact script file at the path listed above if you want to check what it does.`,
+      forensics: {
+        pid: spawn.pid,
+        name: spawn.name,
+        cmdline: spawn.cmdline || '',
+        scriptPath: spawn.scriptPath || '',
+        parentPid: spawn.parentPid || null,
+        parentName: spawn.parentName || '',
+        user: spawn.user || '',
+        trigger: spawn.trigger || '',
+      },
     });
   }
 
@@ -162,10 +180,31 @@ function collectTerminalProcesses(processList) {
   const terminals = new Map();
   for (const proc of processList) {
     if (TERMINAL_PROCS.has(String(proc.name).toLowerCase())) {
-      terminals.set(proc.pid, { parentPid: proc.parentPid });
+      terminals.set(proc.pid, {
+        parentPid: proc.parentPid,
+        path: proc.path || '',
+        user: proc.user || '',
+      });
     }
   }
   return terminals;
+}
+
+/**
+ * Best-effort trigger classification — pure heuristic over the process
+ * lineage already handed to us by systeminformation. No extra processes,
+ * no querying schtasks. Labels: scheduled task, startup item, script
+ * host, or interactive/unknown.
+ */
+function classifyTrigger(spawnName, parentName, parentPath) {
+  const s = String(spawnName || '').toLowerCase();
+  const p = String(parentName || '').toLowerCase();
+  const ppath = String(parentPath || '').toLowerCase();
+
+  if (/taskeng|taskhostw|taskhostex|svchost|schedsvc/i.test(p)) return 'scheduled task';
+  if (/userinit|explorer|shell/i.test(p) || /startup|run\\|runonce/i.test(ppath)) return 'startup item';
+  if (/wscript|cscript|mshta|conhost/i.test(s)) return 'script host';
+  return 'interactive or unknown';
 }
 
 async function heavyScan(state) {
@@ -193,11 +232,23 @@ async function heavyScan(state) {
     const meta = terminalPids.get(pid);
     if (meta && meta.parentPid === process.pid) continue; // systeminformation helper
     const match = list.find((p) => p.pid === pid);
-    spawns.push({
+    const parent = meta && list.find((p) => p.pid === meta.parentPid);
+    const entry = {
       name: match ? match.name : 'script',
       pid,
       cmdline: match && match.command ? match.command : '',
-    });
+    };
+    // Forensic chain (plan.md §2) — same scan, no extra spawned processes:
+    // exact script file path on disk, owning user account, and the
+    // parent process (name + PID) that launched the script.
+    if (match && match.path) entry.scriptPath = match.path;
+    if (match && match.user) entry.user = match.user;
+    if (parent) {
+      entry.parentPid = meta.parentPid;
+      entry.parentName = parent.name || 'unknown';
+    }
+    entry.trigger = classifyTrigger(entry.name, parent ? parent.name : '', parent ? parent.path : '');
+    spawns.push(entry);
   }
   state.prevTerminalPids = new Set(terminalPids.keys());
   state.terminalSeeded = true;

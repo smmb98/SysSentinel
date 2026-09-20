@@ -5,7 +5,9 @@ const { HOST } = require('../config');
 const { historyContent } = require('../logger');
 const dashboardHtml = require('./dashboard');
 const { uninstall, killSelf } = require('../uninstaller');
-const { taskExists, installTask, uninstallTask } = require('../scheduler');
+// DISABLED: background scheduled-task feature does not work (console window,
+// not headless — see src/scheduler.js banner). Do not re-enable.
+// const { taskExists, installTask, uninstallTask } = require('../scheduler');
 
 function send(res, code, body, type) {
   res.writeHead(code, { 'Content-Type': type || 'text/html; charset=utf-8' });
@@ -46,22 +48,24 @@ function handleApi(req, res, state, hub) {
     return;
   }
 
-  if (url.pathname === '/api/task-status') {
-    taskExists().then((exists) => {
-      send(res, 200, JSON.stringify({ taskExists: exists }), 'application/json');
-    });
-    return;
-  }
-
-  if (url.pathname === '/api/install-task' && req.method === 'POST') {
-    installTask().then((r) => send(res, 200, JSON.stringify(r), 'application/json'));
-    return;
-  }
-
-  if (url.pathname === '/api/uninstall-task' && req.method === 'POST') {
-    uninstallTask().then((r) => send(res, 200, JSON.stringify(r), 'application/json'));
-    return;
-  }
+  // DISABLED: scheduled-task endpoints commented out — feature does not work
+  // (see src/scheduler.js banner: console app pops a window, not headless).
+  // if (url.pathname === '/api/task-status') {
+  //   taskExists().then((exists) => {
+  //     send(res, 200, JSON.stringify({ taskExists: exists }), 'application/json');
+  //   });
+  //   return;
+  // }
+  //
+  // if (url.pathname === '/api/install-task' && req.method === 'POST') {
+  //   installTask().then((r) => send(res, 200, JSON.stringify(r), 'application/json'));
+  //   return;
+  // }
+  //
+  // if (url.pathname === '/api/uninstall-task' && req.method === 'POST') {
+  //   uninstallTask().then((r) => send(res, 200, JSON.stringify(r), 'application/json'));
+  //   return;
+  // }
 
   if (url.pathname === '/api/history') {
     const format = url.searchParams.get('format') === 'jsonl' ? 'jsonl' : 'md';

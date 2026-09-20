@@ -15,15 +15,20 @@ const {
 const { createState } = require('./state');
 const { ensureDirs, appendJsonl, appendMd, humanTime, timestamp, dataRoot, logsDir, purgeOldLogs } = require('./logger');
 const { fastSnapshot, heavyScan, buildAnomalies } = require('./monitor');
-const { cliUninstallTask, cliInstallTask } = require('./scheduler');
+// DISABLED: background scheduled-task feature does not work (console window,
+// not headless — see src/scheduler.js banner). Do not re-enable.
+// const { cliUninstallTask, cliInstallTask } = require('./scheduler');
 const { createHub } = require('./web/sse');
 const { createServer } = require('./web/http-server');
 
 function parseArgs() {
   const args = process.argv.slice(2);
   return {
-    installTask: args.includes('--install-task'),
-    uninstallTask: args.includes('--uninstall-task'),
+    // DISABLED: scheduled-task feature does not work. Flags kept parsed but no-op.
+    installTask: false,
+    uninstallTask: false,
+    // installTask: args.includes('--install-task'),
+    // uninstallTask: args.includes('--uninstall-task'),
     noBrowser: args.includes('--no-browser'),
     headless: args.includes('--headless'),
   };
@@ -99,7 +104,7 @@ async function heavyTick(state, hub) {
       if (state.feed.length > MAX_FEED) state.feed.splice(0, state.feed.length - MAX_FEED);
 
       for (const a of feedEntries) {
-        appendJsonl({ type: 'anomaly', timestamp: a.timestamp, level: a.level, title: a.title, detail: a.detail });
+        appendJsonl({ type: 'anomaly', timestamp: a.timestamp, level: a.level, title: a.title, detail: a.detail, forensics: a.forensics || null });
         hub.broadcast('anomaly', a);
       }
     }
@@ -111,14 +116,8 @@ async function heavyTick(state, hub) {
 async function main() {
   const flags = parseArgs();
 
-  if (flags.uninstallTask) {
-    await cliUninstallTask();
-    return;
-  }
-  if (flags.installTask) {
-    await cliInstallTask();
-    return;
-  }
+  // DISABLED: --install-task / --uninstall-task dispatch removed — the
+  // scheduled-task background feature does not work (see scheduler.js banner).
 
   const state = createState();
   const hub = createHub(SSE_HEARTBEAT_MS);
